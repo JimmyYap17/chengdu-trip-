@@ -1,7 +1,7 @@
 // Offline support for the trip planner: keeps the app, the encrypted plan and the
 // Firebase SDK cached so it opens with no signal. Tickets and everything you add
 // are cached by Firestore's own offline cache, not here.
-const CACHE = "trip-v2";
+const CACHE = "trip-v3";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "plan.enc.json", "firebase-config.js", "manifest.webmanifest", "icons/icon-192.png", "icons/apple-touch-icon.png"];
 const SDK = "https://www.gstatic.com/firebasejs/10.12.2/";
 

@@ -64,7 +64,7 @@ function applyPlan(p) {
 
 /* ========================= state ========================= */
 const S = {
-  bookings: {}, checks: {}, ideas: {}, days: {}, places: {}, tickets: [], imgs: {}, ticketsReady: false,
+  bookings: {}, checks: {}, ideas: {}, days: {}, places: {}, settings: {}, expenses: [], exp: null, expCat: "All", tickets: [], imgs: {}, ticketsReady: false,
   tab: "now", day: null, preview: null, adding: null, overlay: null, confirmDel: null, sync: ["", "Connecting…"],
 };
 const now = () => (S.preview ? new Date(S.preview) : new Date());
@@ -150,7 +150,11 @@ function listen() {
     if (S.overlay?.kind === "place") renderOverlay();
     render();
   }, onDbError));
-  sub("bookings", "bookings"); sub("checks", "checks"); sub("ideas", "ideas"); sub("days", "days"); sub("places", "places");
+  sub("bookings", "bookings"); sub("checks", "checks"); sub("ideas", "ideas"); sub("days", "days"); sub("places", "places"); sub("settings", "settings");
+  unsubs.push(fb.onSnapshot(coll("expenses"), (snap) => {
+    S.expenses = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    render();
+  }, onDbError));
   unsubs.push(fb.onSnapshot(coll("tickets"), { includeMetadataChanges: true }, (snap) => {
     const m = snap.metadata;
     S.sync = m.hasPendingWrites ? ["pending", "Saving…"] : m.fromCache ? ["pending", "Offline · changes sync when you reconnect"] : ["live", "Synced"];
@@ -178,7 +182,7 @@ function mapLinks(p) {
 }
 
 /* ========================= render: shared bits ========================= */
-function chipsFor(it) {
+function chipsFor(it, opts = {}) {
   let h = "";
   if (it.place && PLACES[it.place]) { const p = place(it.place); h += `<button class="chip map" data-place="${it.place}">${ICON.pin}<span>${esc(p.gmap ? "Map" : p.zh)}</span></button>`; }
   if (it.bk) {
@@ -188,6 +192,10 @@ function chipsFor(it) {
   }
   if (it.fixed && it.at && !it.warn) h += `<span class="pill fixed-pill">Fixed time</span>`;
   if (it.cost) h += `<span class="cost">${esc(it.cost)}</span>`;
+  if (opts.spend && (it.cost || it.bk)) {
+    const n = S.expenses.filter((e) => e.item === opts.spend).length;
+    h += `<button class="chip spend" data-spend="${opts.spend}" aria-label="Log an expense for this">+ ¥${n ? " · " + n : ""}</button>`;
+  }
   return h;
 }
 function itemHTML(day, it, opts = {}) {
@@ -198,7 +206,7 @@ function itemHTML(day, it, opts = {}) {
   let tm = esc(it.t);
   if (tl && dl && !it.fixed && it.at) tm = `${fmtHM(tl.start)}<small><s>${esc(it.t)}</s> +${dl}m</small>`;
   const lb = tl && tl.leave ? `<div class="lb">Leave by ${fmtHM(tl.leave)}${it.go.how ? ` · ${esc(it.go.how)} ~${it.go.mins}m` : ""}</div>` : "";
-  return `<div class="${cls.join(" ")}"><div class="tm">${tm}</div><div style="min-width:0">${lb}<div class="what">${esc(it.what)}</div>${it.info ? `<div class="info">${esc(it.info)}</div>` : ""}<div class="meta">${chipsFor(it)}</div></div></div>`;
+  return `<div class="${cls.join(" ")}"><div class="tm">${tm}</div><div style="min-width:0">${lb}<div class="what">${esc(it.what)}</div>${it.info ? `<div class="info">${esc(it.info)}</div>` : ""}<div class="meta">${chipsFor(it, { spend: opts.key })}</div></div></div>`;
 }
 function dayTimeline(day, tl, n) {
   const rows = []; let marked = false;
@@ -208,7 +216,7 @@ function dayTimeline(day, tl, n) {
     const laterStarted = x && tl.some((t) => t.start > x.start && t.start <= n && !t.it.loose);
     const cur = x && x.start <= n && (x.end ? x.end > n : !laterStarted);
     const past = x && (x.end ? x.end < n : laterStarted);
-    rows.push(itemHTML(day, it, { tl: x, past: !!past && !cur, cur: !!cur }));
+    rows.push(itemHTML(day, it, { tl: x, past: !!past && !cur, cur: !!cur, key: day.date + "-" + i }));
   });
   return `<div class="tl">${rows.join("")}</div>`;
 }
@@ -355,6 +363,123 @@ function renderPrep() {
   return h;
 }
 
+/* ========================= EXPENSES ========================= */
+const DEFAULT_CATS = ["Food", "Transport", "Ticketing", "Add-ons", "Hotels"];
+const BUD = () => PLAN.budget || { fx: 5.5, cats: DEFAULT_CATS, lines: [] };
+const CATS = () => BUD().cats || DEFAULT_CATS;
+const fxRate = () => +(S.settings.fx?.rate || BUD().fx || 5.5);
+const people = () => (PLAN.who || "Me & You").split(/\s*&\s*|\s*,\s*/).filter(Boolean);
+const toCNY = (e) => (e.cur === "SGD" ? (+e.amt || 0) * fxRate() : +e.amt || 0);
+const money = (n, dp = 0) => (+n || 0).toLocaleString("en-SG", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+const amtTxt = (e) => (e.cur === "SGD" ? "S$" : "¥") + money(e.amt, +e.amt % 1 ? 2 : 0);
+const catKey = (c) => "cat-" + String(c).toLowerCase().replace(/[^a-z]/g, "");
+function guessCat(it) {
+  if (it.bk && bkData(it.bk)?.cat) return bkData(it.bk).cat;
+  const s = (it.what + " " + (it.cost || "")).toLowerCase();
+  if (/dinner|lunch|breakfast|hot pot|food|snack|tea|bites|buffet/.test(s)) return "Food";
+  if (/train|bus|taxi|metro|didi|flight|horse/.test(s)) return /horse/.test(s) ? "Add-ons" : "Transport";
+  if (/ticket|park|valley|base|scenic|gou/.test(s)) return "Ticketing";
+  if (/hotel|check in/.test(s)) return "Hotels";
+  return "Add-ons";
+}
+const lineFor = (bk) => (bk ? (BUD().lines || []).find((l) => l.bk === bk) : null);
+function openExpense(pre = {}) {
+  const today = cnYMD(now());
+  S.exp = { id: "", amt: "", cur: "CNY", cat: CATS()[0], desc: "", date: DAYS.some((d) => d.date === today) ? today : "", who: local.get("trip-who") || people()[0], line: "", ...pre };
+  if (S.tab !== "expenses") location.hash = "#expenses"; else { render(true); window.scrollTo(0, 0); }
+}
+function readExp() {
+  const e = S.exp; if (!e) return;
+  const g = (id) => document.getElementById(id);
+  if (!g("eamt")) return;
+  e.amt = g("eamt").value; e.cur = g("ecur").value; e.cat = g("ecat").value; e.desc = g("edesc").value;
+  e.date = g("edate").value; e.who = g("ewho").value; e.line = g("eline").value;
+}
+function expForm() {
+  const e = S.exp, lines = BUD().lines || [];
+  const opt = (v, label, sel) => `<option value="${esc(v)}"${v === sel ? " selected" : ""}>${esc(label)}</option>`;
+  const line = lines.find((l) => l.id === e.line);
+  return `<section class="card form" id="expform"><h3 style="font-size:17px">${e.id ? "Edit expense" : "New expense"}</h3>
+    <div class="row" style="flex-wrap:nowrap"><label style="flex:1;min-width:0">Amount<input id="eamt" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(e.amt)}" placeholder="${line && line.cny ? "Planned " + line.cny : "0"}"></label>
+      <label style="width:96px">Currency<select id="ecur">${opt("CNY", "CNY ¥", e.cur)}${opt("SGD", "SGD S$", e.cur)}</select></label></div>
+    <label>Category<select id="ecat">${CATS().map((c) => opt(c, c, e.cat)).join("")}</select></label>
+    <label>What<input id="edesc" type="text" value="${esc(e.desc)}" placeholder="e.g. Hot pot dinner"></label>
+    <div class="row" style="flex-wrap:nowrap"><label style="flex:1;min-width:0">Day<select id="edate">${opt("", "Before / outside the trip", e.date)}${DAYS.map((d) => opt(d.date, `Day ${d.n} · ${dayLabel(d.date)}`, e.date)).join("")}</select></label>
+      <label style="flex:1;min-width:0">Paid by<select id="ewho">${people().map((p) => opt(p, p, e.who)).join("")}</select></label></div>
+    <label>From the plan (optional)<select id="eline">${opt("", "— not a planned item —", e.line)}${lines.map((l) => opt(l.id, `${l.name}${l.cny ? " · planned ¥" + money(l.cny) : ""}`, e.line)).join("")}</select></label>
+    <div class="row"><button class="btn primary" data-act="expsave">${e.id ? "Save changes" : "Add expense"}</button><button class="btn" data-act="expcancel">Cancel</button>
+    ${e.id ? (e.confirmDel ? `<span class="note">Delete for both of you?</span><button class="btn danger" data-act="expdelyes">Delete</button>` : `<button class="btn danger" data-act="expdel">Delete</button>`) : ""}</div>
+    ${e.err ? `<div class="note" style="color:var(--chili)">${esc(e.err)}</div>` : ""}</section>`;
+}
+function renderExpenses() {
+  const B = BUD(), lines = B.lines || [], cats = CATS(), fx = fxRate();
+  const exps = S.expenses;
+  const spent = exps.reduce((s, e) => s + toCNY(e), 0);
+  const planned = lines.reduce((s, l) => s + (l.cny || 0), 0);
+  const pct = planned ? Math.min(100, (spent / planned) * 100) : 0;
+  const over = spent > planned && planned > 0;
+  let h = "";
+  if (S.exp) h += expForm();
+  h += `<section class="card" style="display:grid;gap:10px">
+    <div class="sec-h"><h2>Expenses</h2>${S.exp ? "" : `<button class="btn primary" data-act="expadd">+ Add expense</button>`}</div>
+    <div class="spent"><b class="mono">¥${money(spent)}</b><span>≈ S$${money(spent / fx)} spent of ¥${money(planned)} planned</span></div>
+    <div class="progress${over ? " over" : ""}"><i style="width:${pct}%"></i></div>
+    <div class="note">${over ? `<b style="color:var(--chili)">¥${money(spent - planned)} over budget</b>` : `¥${money(planned - spent)} left (≈ S$${money((planned - spent) / fx)})`} · Rate: 1 SGD = <button class="linkbtn mono" data-act="fx">${money(fx, 2)} CNY</button></div>
+    ${S.fxEdit ? `<div class="row"><label class="label" for="fxin">CNY per 1 SGD</label><input id="fxin" type="number" step="0.01" inputmode="decimal" value="${fx}" style="width:100px;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:5px 8px"><button class="btn small" data-act="fxsave">Save</button></div>` : ""}
+  </section>`;
+  // by category
+  h += `<section class="card" style="display:grid;gap:12px"><div class="label">By category</div>${cats.map((c) => {
+    const s = exps.filter((e) => e.cat === c).reduce((a, e) => a + toCNY(e), 0);
+    const p = lines.filter((l) => l.cat === c).reduce((a, l) => a + (l.cny || 0), 0);
+    const w = p ? Math.min(100, (s / p) * 100) : s ? 100 : 0;
+    return `<button class="catrow" data-expcat="${esc(c)}" aria-pressed="${S.expCat === c}"><span class="cdot ${catKey(c)}"></span><span class="cname">${esc(c)}</span><span class="mono camt">¥${money(s)} <span class="muted">/ ${money(p)}</span></span><span class="progress${p && s > p ? " over" : ""}" style="grid-column:2/-1"><i style="width:${w}%"></i></span></button>`;
+  }).join("")}</section>`;
+  // who paid + settle up
+  const ppl = people();
+  if (exps.length && ppl.length === 2) {
+    const paid = ppl.map((p) => exps.filter((e) => (e.who || ppl[0]) === p).reduce((a, e) => a + toCNY(e), 0));
+    const diff = (paid[0] - paid[1]) / 2;
+    h += `<section class="card" style="display:grid;gap:8px"><div class="label">Who paid</div>
+      <div class="whopaid">${ppl.map((p, i) => `<div><span>${esc(p)}</span><b class="mono">¥${money(paid[i])}</b></div>`).join("")}</div>
+      <div class="note">${Math.abs(diff) < 1 ? "You're even." : `Split 50/50: <b style="color:var(--ink)">${esc(diff > 0 ? ppl[1] : ppl[0])} owes ${esc(diff > 0 ? ppl[0] : ppl[1])} ¥${money(Math.abs(diff))}</b> (≈ S$${money(Math.abs(diff) / fx)})`}</div></section>`;
+  }
+  // list
+  const list = exps.filter((e) => S.expCat === "All" || e.cat === S.expCat);
+  h += `<div class="sec-h"><h2>${S.expCat === "All" ? "All expenses" : esc(S.expCat)}</h2>${S.expCat !== "All" ? `<button class="btn small" data-expcat="All">Show all</button>` : `<span class="mono muted">${exps.length}</span>`}</div>`;
+  if (!list.length) h += `<div class="empty">${exps.length ? "Nothing in this category yet." : `<b style="color:var(--ink)">No expenses yet.</b><br>Tap <b>Add expense</b>, tap <b>+ ¥</b> on any item in the day plans, or log a planned cost below.`}</div>`;
+  else {
+    const groups = {};
+    list.forEach((e) => (groups[e.date || ""] ||= []).push(e));
+    h += `<div class="tl">` + Object.keys(groups).sort().reverse().map((d) => {
+      const tot = groups[d].reduce((a, e) => a + toCNY(e), 0);
+      return `<div class="nowmark" style="background:var(--sunk);color:var(--muted);justify-content:space-between"><span>${d ? esc(dayLabel(d)) : "Before / outside the trip"}</span><span class="mono">¥${money(tot)}</span></div>` +
+        groups[d].sort((a, b) => (b.created || 0) - (a.created || 0)).map((e) => `<button class="exrow" data-exp="${esc(e.id)}"><span style="min-width:0"><span class="exdesc">${esc(e.desc || e.cat)}</span><span class="exmeta"><span class="cdot ${catKey(e.cat)}"></span>${esc(e.cat)} · ${esc(e.who || "")}</span></span><span class="mono exam">${amtTxt(e)}${e.cur === "SGD" ? `<small>¥${money(toCNY(e))}</small>` : ""}</span></button>`).join("");
+    }).join("") + `</div>`;
+  }
+  // from the plan
+  if (lines.length) {
+    h += `<details class="route"${S.planOpen ? " open" : ""} id="planlines"><summary>Planned costs from the plan</summary><div class="route-body" style="padding:0 0 8px">${lines
+      .slice().sort((a, b) => (a.date || "9").localeCompare(b.date || "9"))
+      .map((l) => {
+        const got = exps.filter((e) => e.line === l.id).reduce((a, e) => a + toCNY(e), 0);
+        return `<div class="planline"><span style="min-width:0"><span class="exdesc">${esc(l.name)}</span><span class="exmeta"><span class="cdot ${catKey(l.cat)}"></span>${esc(l.cat)}${l.date ? " · " + esc(dayLabel(l.date)) : ""}</span></span><span class="mono exam">¥${money(l.cny)}${got ? `<small style="color:${got > l.cny ? "var(--chili)" : "var(--ok)"}">spent ¥${money(got)}</small>` : ""}</span><button class="btn small" data-log="${esc(l.id)}">${got ? "+ More" : "Log"}</button></div>`;
+      }).join("")}</div></details>`;
+  }
+  return h;
+}
+function saveExpense() {
+  readExp(); const e = S.exp;
+  const amt = Math.round(parseFloat(e.amt) * 100) / 100;
+  if (!(amt > 0)) { e.err = "Enter the amount you paid."; render(true); return; }
+  const id = e.id || "e" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const old = S.expenses.find((x) => x.id === id);
+  const doc = { amt, cur: e.cur, cat: e.cat, desc: e.desc.trim(), date: e.date, who: e.who, line: e.line, item: e.item || "", created: old?.created || Date.now() };
+  local.set("trip-who", e.who);
+  S.expenses = [...S.expenses.filter((x) => x.id !== id), { id, ...doc }];
+  put("expenses", id, doc);
+  S.exp = null; toast(e.id ? "Expense updated" : "Expense added"); render(true);
+}
+
 /* ========================= overlays ========================= */
 let wake = null;
 async function keepAwake() { try { if (!wake && navigator.wakeLock) wake = await navigator.wakeLock.request("screen"); } catch {} }
@@ -391,7 +516,7 @@ function renderOverlay() {
 let started = false;
 function render(force) {
   if (!started) return;
-  const tabs = { now: renderNow, days: renderDays, tickets: renderTickets, bookings: renderBookings, prep: renderPrep };
+  const tabs = { now: renderNow, days: renderDays, tickets: renderTickets, bookings: renderBookings, expenses: renderExpenses, prep: renderPrep };
   const view = $("#view"), ae = document.activeElement;
   if (!force && ae && view.contains(ae) && /INPUT|SELECT|TEXTAREA/.test(ae.tagName)) S.dirty = true;
   else { view.innerHTML = tabs[S.tab](); S.dirty = false; }
@@ -405,7 +530,7 @@ function renderClock() {
 }
 function route() {
   const h = location.hash.slice(1);
-  S.tab = ["now", "days", "tickets", "bookings", "prep"].includes(h) ? h : "now";
+  S.tab = ["now", "days", "tickets", "bookings", "expenses", "prep"].includes(h) ? h : "now";
   render(true); window.scrollTo(0, 0);
 }
 function start() {
@@ -520,9 +645,18 @@ function readForm() {
   if (g("tbk")) a.bk = g("tbk").value; if (g("ttitle")) a.title = g("ttitle").value; if (g("tnote")) a.note = g("tnote").value;
 }
 document.addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-place],[data-ticket],[data-act],[data-day],[data-late],[data-pv],[data-goday],[data-copy]");
+  const t = e.target.closest("[data-place],[data-ticket],[data-act],[data-day],[data-late],[data-pv],[data-goday],[data-copy],[data-spend],[data-exp],[data-expcat],[data-log]");
   if (!t) return;
   if (t.dataset.goday) { S.day = t.dataset.goday; return; }
+  if (t.dataset.spend) {
+    const [date, i] = [t.dataset.spend.slice(0, 10), +t.dataset.spend.slice(11)];
+    const it = DAYS.find((d) => d.date === date).items[i], line = lineFor(it.bk);
+    openExpense({ desc: it.what.length > 70 ? it.what.slice(0, 68) + "…" : it.what, cat: line?.cat || guessCat(it), date, line: line?.id || "", item: t.dataset.spend });
+    return;
+  }
+  if (t.dataset.log) { const l = BUD().lines.find((x) => x.id === t.dataset.log); S.planOpen = true; openExpense({ desc: l.name, cat: l.cat, line: l.id, ...(l.date ? { date: l.date } : {}) }); return; }
+  if (t.dataset.exp) { const x = S.expenses.find((y) => y.id === t.dataset.exp); if (x) { S.exp = { ...x, amt: String(x.amt) }; render(true); window.scrollTo(0, 0); } return; }
+  if (t.dataset.expcat) { S.expCat = S.expCat === t.dataset.expcat ? "All" : t.dataset.expcat; render(true); return; }
   if (t.dataset.place) { S.overlay = { kind: "place", id: t.dataset.place }; renderOverlay(); return; }
   if (t.dataset.ticket) { S.overlay = { kind: "ticket", id: t.dataset.ticket }; S.confirmDel = null; renderOverlay(); return; }
   if (t.dataset.day) { S.day = t.dataset.day; render(true); return; }
@@ -546,6 +680,13 @@ document.addEventListener("click", async (e) => {
   else if (act === "delno") { S.confirmDel = null; renderOverlay(); }
   else if (act === "delyes") deleteTicket(S.overlay.id);
   else if (act === "savephone") saveToPhone(S.overlay.id);
+  else if (act === "expadd") openExpense();
+  else if (act === "expsave") saveExpense();
+  else if (act === "expcancel") { S.exp = null; render(true); }
+  else if (act === "expdel") { readExp(); S.exp.confirmDel = true; render(true); }
+  else if (act === "expdelyes") { const id = S.exp.id; S.expenses = S.expenses.filter((x) => x.id !== id); fb.deleteDoc(ref("expenses", id)).catch(failed); S.exp = null; toast("Expense deleted"); render(true); }
+  else if (act === "fx") { S.fxEdit = !S.fxEdit; render(true); }
+  else if (act === "fxsave") { const r = parseFloat($("#fxin").value); if (r > 0) { S.settings.fx = { rate: r }; put("settings", "fx", { rate: r }); } S.fxEdit = false; render(true); }
   else if (act === "signout") { local.del("trip-pass-" + uid); fb.signOut(fb.auth); }
   else if (act === "saveplace") {
     const id = S.overlay.id, zh = $("#pzh").value.trim(), addr = $("#paddr").value.trim();
@@ -564,6 +705,12 @@ document.addEventListener("change", (e) => {
     readForm(); render(true); return;
   }
   if (t.id === "tbk") { readForm(); if (!S.adding.title && t.value) { S.adding.title = bkData(t.value).name; $("#ttitle").value = S.adding.title; } return; }
+  if (t.id === "eline") {
+    readExp(); const l = BUD().lines.find((x) => x.id === t.value);
+    if (l) { S.exp.cat = l.cat; if (!S.exp.desc) S.exp.desc = l.name; if (!S.exp.date && l.date) S.exp.date = l.date; }
+    render(true); return;
+  }
+  if (["eamt", "ecur", "ecat", "edesc", "edate", "ewho"].includes(t.id)) { readExp(); return; }
   if (t.id === "pv") { S.preview = t.value ? +new Date(t.value + ":00+08:00") : null; render(true); return; }
   if (!uid) return;
   if (t.dataset.bkstatus) { const id = t.dataset.bkstatus; S.bookings[id] = { ...(S.bookings[id] || {}), status: t.value }; render(true); put("bookings", id, S.bookings[id]); }
@@ -571,6 +718,7 @@ document.addEventListener("change", (e) => {
   else if (t.dataset.check) { const id = t.dataset.check; S.checks[id] = { done: t.checked }; render(true); put("checks", id, S.checks[id]); }
   else if (t.dataset.idea) { const id = t.dataset.idea; S.ideas[id] = { picked: t.checked }; render(true); put("ideas", id, S.ideas[id]); }
 });
+document.addEventListener("toggle", (e) => { if (e.target.id === "planlines") S.planOpen = e.target.open; }, true);
 document.addEventListener("focusout", () => {
   setTimeout(() => { if (S.dirty && !(document.activeElement && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName))) render(true); }, 0);
 });
