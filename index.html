@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trip Planner</title>
+<meta name="description" content="Day plans, leave-by timer, tickets and bookings for a trip, shared between two phones.">
+<meta name="theme-color" content="#0B7F7B">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Trip">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;700&family=Noto+Serif+SC:wght@600&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="gate wrap" id="gate">
+  <form class="card" id="signin" hidden>
+    <h1>Trip Planner</h1>
+    <p class="note" style="margin:0">Sign in with the trip's shared username and password. Use the same pair on both phones so you see the same tickets and bookings.</p>
+    <div class="form">
+      <label>Username<input id="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+      <label>Password<input id="password" type="password" autocomplete="current-password" required></label>
+    </div>
+    <button class="btn primary" id="signInBtn" type="submit">Sign in</button>
+    <div class="msg" id="authMsg"></div>
+  </form>
+  <form class="card" id="unlock" hidden>
+    <h1>Unlock the plan</h1>
+    <p class="note" style="margin:0">The itinerary is stored encrypted. Enter the trip passphrase once; this account remembers it after that, so the other phone won't be asked.</p>
+    <div class="form"><label>Trip passphrase<input id="passphrase" autocomplete="off" autocapitalize="none" spellcheck="false" required></label></div>
+    <div class="row"><button class="btn primary" id="unlockBtn" type="submit">Unlock</button><button class="btn" type="button" id="signOut2">Sign out</button></div>
+    <div class="msg" id="unlockMsg"></div>
+  </form>
+  <div class="card" id="loading"><h1>Trip Planner</h1><div class="msg" id="loadMsg">Loading…</div></div>
+</div>
+
+<div id="app" hidden>
+  <header class="top">
+    <div class="wrap">
+      <div class="brand"><span id="brandTitle">Trip</span><small id="brandWho"></small></div>
+      <div class="clock" id="clock"><b>--:--</b><span>China time</span></div>
+    </div>
+  </header>
+  <main class="wrap"><div id="view"></div></main>
+  <nav class="tabs" aria-label="Sections">
+    <div class="wrap">
+      <a href="#now" data-tab="now"><svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/></svg>Now</a>
+      <a href="#days" data-tab="days"><svg viewBox="0 0 24 24"><path d="M3 20l6-12 4 7 3-4 5 9z"/><circle cx="17" cy="5" r="1.6"/></svg>Days</a>
+      <a href="#tickets" data-tab="tickets"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><path d="M14 14h2v2h-2zM18 18h2v2M14 20h2"/></svg>Tickets</a>
+      <a href="#bookings" data-tab="bookings"><svg viewBox="0 0 24 24"><path d="M5 4h14v17l-7-4-7 4z"/></svg>Bookings</a>
+      <a href="#prep" data-tab="prep"><svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/></svg>Prep</a>
+    </div>
+  </nav>
+</div>
+
+<script type="module" src="app.js"></script>
+<script>
+  if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).catch(() => {}));
+</script>
+</body>
+</html>
