@@ -11,3 +11,7 @@ The itinerary is in `plan.enc.json`, encrypted because the repo is public. Ask t
 3. `TRIP_KEY=<passphrase> python3 scripts/trip_plan.py encrypt <same path>`, bump `CACHE` in `sw.js`, commit and push to `main`.
 
 Never commit the plaintext plan or the passphrase, and never write trip details (names, hotels, dates, flights) anywhere else in the repo.
+
+## Adding tickets for the user
+
+Ticket screenshots the user sends in chat can go into the plan's `tickets` list (`{id, title, bk, note, images: [data URL]}`); the app shows them on the Tickets page next to the ones uploaded in the app, read-only. Keep each image small (a phone screenshot, not a full-resolution photo).

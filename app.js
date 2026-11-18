@@ -72,7 +72,9 @@ const bkData = (id) => { const b = BOOKINGS.find((x) => x.id === id); return b ?
 const place = (id) => (PLACES[id] ? { ...PLACES[id], ...(S.places[id] || {}), id } : null);
 const delayFor = (date) => +(S.days[date]?.delay || 0);
 const ticketsFor = (bk) => S.tickets.filter((t) => t.bk === bk);
-const pagesOf = (t) => (t.pages || []).map((id) => S.imgs[id]).filter(Boolean);
+const pagesOf = (t) => (t.images ? t.images : (t.pages || []).map((id) => S.imgs[id]).filter(Boolean));
+// Tickets Claude adds through the (encrypted) plan file; shown with the ones you upload.
+const planTickets = () => (PLAN.tickets || []).map((t) => ({ ...t, fromPlan: true, created: 0 }));
 
 function timeline() {
   const out = [];
@@ -158,7 +160,7 @@ function listen() {
   unsubs.push(fb.onSnapshot(coll("tickets"), { includeMetadataChanges: true }, (snap) => {
     const m = snap.metadata;
     S.sync = m.hasPendingWrites ? ["pending", "Saving…"] : m.fromCache ? ["pending", "Offline · changes sync when you reconnect"] : ["live", "Synced"];
-    S.tickets = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.created || 0) - (b.created || 0));
+    S.tickets = [...planTickets(), ...snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.created || 0) - (b.created || 0))];
     S.ticketsReady = true;
     if (S.overlay?.kind === "ticket") renderOverlay();
     render();
@@ -309,7 +311,7 @@ function renderTickets() {
     Object.keys(groups).sort().forEach((k) => {
       h += `<div class="label">${k === "other" ? "Other" : esc(dayLabel(k))}</div><div class="tgrid">${groups[k].map((t) => {
         const img = pagesOf(t)[0];
-        return `<button class="tk" data-ticket="${esc(t.id)}"><div class="thumb" style="${img ? `background-image:url(${img})` : ""}">${img ? "" : "Loading…"}</div><div class="cap"><b>${esc(t.title || "Ticket")}</b><span>${esc(t.bk ? bkData(t.bk)?.name || "" : "")}${(t.pages || []).length > 1 ? " · " + t.pages.length + " pages" : ""}</span></div></button>`;
+        return `<button class="tk" data-ticket="${esc(t.id)}"><div class="thumb" style="${img ? `background-image:url(${img})` : ""}">${img ? "" : "Loading…"}</div><div class="cap"><b>${esc(t.title || "Ticket")}</b><span>${esc(t.bk ? bkData(t.bk)?.name || "" : "")}${pagesOf(t).length > 1 ? " · " + pagesOf(t).length + " pages" : ""}</span></div></button>`;
       }).join("")}</div>`;
     });
   }
@@ -505,7 +507,7 @@ function renderOverlay() {
       ${b || t.note ? `<div class="muted" style="font-size:14px">${esc([b?.name, b?.ref, t.note].filter(Boolean).join(" · "))}</div>` : ""}
       <div class="imgs">${pages.length ? pages.map((src) => `<img src="${src}" alt="${esc(t.title || "Ticket")}">`).join("") : `<p class="muted">Loading the image…</p>`}</div>
       <div class="row" style="padding-bottom:28px"><button class="btn" data-act="savephone">Save to phone</button>
-      ${S.confirmDel === t.id ? `<span class="muted" style="font-size:13px">Delete for both of you?</span><button class="btn danger" data-act="delyes">Delete</button><button class="btn" data-act="delno">Keep</button>` : `<button class="btn danger" data-act="del">Delete</button>`}</div></div>`;
+      ${t.fromPlan ? `<span class="muted" style="font-size:13px">Added from the plan</span>` : S.confirmDel === t.id ? `<span class="muted" style="font-size:13px">Delete for both of you?</span><button class="btn danger" data-act="delyes">Delete</button><button class="btn" data-act="delno">Keep</button>` : `<button class="btn danger" data-act="del">Delete</button>`}</div></div>`;
     keepAwake();
   }
   document.body.style.overflow = "hidden";
@@ -531,6 +533,7 @@ function renderClock() {
 function route() {
   const h = location.hash.slice(1);
   S.tab = ["now", "days", "tickets", "bookings", "expenses", "prep"].includes(h) ? h : "now";
+  if (S.overlay) { S.overlay = null; S.confirmDel = null; renderOverlay(); }
   render(true); window.scrollTo(0, 0);
 }
 function start() {
@@ -628,7 +631,7 @@ async function saveToPhone(id) {
   const slug = (t.title || "ticket").replace(/[^\w一-鿿-]+/g, "-").slice(0, 60);
   const files = await Promise.all(pagesOf(t).map(async (src, i, all) => {
     const blob = await (await fetch(src)).blob();
-    return new File([blob], `${slug}${all.length > 1 ? "-" + (i + 1) : ""}.${blob.type === "image/png" ? "png" : "jpg"}`, { type: blob.type });
+    return new File([blob], `${slug}${all.length > 1 ? "-" + (i + 1) : ""}.${blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg"}`, { type: blob.type });
   }));
   if (!files.length) return;
   if (navigator.canShare && navigator.canShare({ files })) {
