@@ -536,13 +536,34 @@ function route() {
   if (S.overlay) { S.overlay = null; S.confirmDel = null; renderOverlay(); }
   render(true); window.scrollTo(0, 0);
 }
+// Pick up plan changes (new tickets, times) when the app comes back to the front,
+// so an update doesn't need a full restart. Silent if offline or unchanged.
+let refreshTimer = null, lastRefresh = 0, planText = "";
+async function refreshPlan() {
+  const pass = local.get("trip-pass-" + uid);
+  if (!pass || !navigator.onLine || Date.now() - lastRefresh < 60000) return;
+  lastRefresh = Date.now();
+  try {
+    const p = await decryptPlan(pass);
+    const text = JSON.stringify(p);
+    if (!planText) { planText = JSON.stringify(PLAN); }
+    if (text === planText) return;
+    planText = text;
+    applyPlan(p);
+    S.tickets = [...planTickets(), ...S.tickets.filter((t) => !t.fromPlan)];
+    if (S.overlay) renderOverlay();
+    render(true);
+    toast("Plan updated");
+  } catch (e) { console.error(e); }
+}
 function start() {
   $("#gate").hidden = true; $("#app").hidden = false;
   if (!started) {
     started = true;
     addEventListener("hashchange", route);
     setInterval(() => { renderClock(); if (S.tab === "now" && !S.overlay) render(); }, 30000);
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) { render(); if (S.overlay?.kind === "ticket") keepAwake(); } });
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) { render(); refreshPlan(); if (S.overlay?.kind === "ticket") keepAwake(); } });
+    refreshTimer = setInterval(refreshPlan, 10 * 60000);
   }
   listen();
   route();
